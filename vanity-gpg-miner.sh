@@ -23,6 +23,8 @@ EXPORT_DIR="./gpg_export"
 TOTAL=1000000
 TEMP_DIR="/tmp/gpg_temp"
 PROGRESS_FILE="$TEMP_DIR/progress"
+LAST_COUNT_FILE="$TEMP_DIR/last_count"
+START_TIME="$TEMP_DIR/start_time"
 CORES=$(nproc)
 CHUNK_SIZE=$(( TOTAL / CORES + 1))
 
@@ -33,6 +35,8 @@ setup_directories() {
     mkdir -p "$EXPORT_DIR"
     mkdir -p "$TEMP_DIR"
     echo "0" > "$PROGRESS_FILE"
+    echo "0" > "$LAST_COUNT_FILE"
+    date +%s > "$START_TIME"
 }
 
 cleanup() {
@@ -43,20 +47,53 @@ cleanup() {
     exit 1
 }
 
+calculate_speed() {
+    local current=$1
+    local last_count=$(cat "$LAST_COUNT_FILE")
+    local elapsed=$2
+    
+    # Calculate keys per second
+    local keys_per_sec=0
+    if [ $elapsed -gt 0 ]; then
+        keys_per_sec=$(( (current - last_count) ))
+    fi
+    
+    # Update last count
+    echo "$current" > "$LAST_COUNT_FILE"
+    
+    echo "$keys_per_sec"
+}
+
 show_progress() {
+    local last_update=$(date +%s)
+    
     while true; do
         CURRENT=$(cat "$PROGRESS_FILE" 2>/dev/null || echo "0")
         CURRENT=${CURRENT:-0}
         FOUND=$(find "$EXPORT_DIR" -name "public_key_*.asc" 2>/dev/null | wc -l || echo "0")
         FOUND=${FOUND:-0}
         
-        CURRENT=$(printf "%.0f" "$CURRENT")
-        PERCENT=$(( (CURRENT * 100) / TOTAL ))
+        current_time=$(date +%s)
+        elapsed=$((current_time - last_update))
         
-        printf "\rProgress: [%3d%%] Checked: %d/%d Found: %d Keys   " \
-               "$PERCENT" "$CURRENT" "$TOTAL" "$FOUND"
+        if [ $elapsed -ge 1 ]; then
+            SPEED=$(calculate_speed $CURRENT $elapsed)
+            last_update=$current_time
+            
+            # Calculate overall average
+            start_time=$(cat "$START_TIME")
+            total_elapsed=$((current_time - start_time))
+            [ $total_elapsed -lt 1 ] && total_elapsed=1
+            AVG_SPEED=$(( CURRENT / total_elapsed ))
+            
+            CURRENT=$(printf "%.0f" "$CURRENT")
+            PERCENT=$(( (CURRENT * 100) / TOTAL ))
+            
+            printf "\rProgress: [%3d%%] Checked: %d/%d Found: %d Keys | Speed: %d k/s | Avg: %d k/s   " \
+                   "$PERCENT" "$CURRENT" "$TOTAL" "$FOUND" "$SPEED" "$AVG_SPEED"
+        fi
         
-        sleep 1
+        sleep 0.1
         [[ $CURRENT -ge $TOTAL ]] && break
     done
 }
